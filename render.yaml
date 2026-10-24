@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: tchin-slip-bot
+    env: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server.js
+    envVars:
+      - key: PORT
+        value: 3000
+      - key: MERCHANT_NAME
+        value: นพกฤตณ์ธรา ชินโสภา
+      - key: COMPANY_ACCOUNT_NO
+        value: "0651475163"
+      - key: COMPANY_ACCOUNT_LAST4
+        value: "5163"
+      - key: ENABLE_ACCOUNT_FILTER
+        value: "true"
+      - key: LINE_CHANNEL_ACCESS_TOKEN
+        sync: false
+      - key: LINE_CHANNEL_SECRET
+        sync: false
