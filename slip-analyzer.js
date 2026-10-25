@@ -18,6 +18,10 @@ const BANK_MAP = {
   'PROMPTPAY': 'พร้อมเพย์ (PromptPay)'
 };
 
+// Regex สำหรับตรวจจับชื่อร้านค้า ต.ชิน (นพกฤตณ์ธรา ชินโสภา)
+// รองรับกรณี OCR เพี้ยนจากฟอนต์ธนาคารแบบไม่มีหัว (เช่น แพกฤตณ์ธรา, ซินโสภา, เพกฤต)
+const MERCHANT_NAME_REGEX = /(?:นพ|แพ|เพ)?กฤต[ณ์]?ธรา|(?:ช|ซ)ินโส[ภพมด]?า?/i;
+
 /**
  * แปลงเลขอารบิก / แก้ไขข้อผิดพลาดทั่วไปของ OCR
  */
@@ -138,10 +142,9 @@ async function analyzeSlipImage(imageBuffer) {
       console.warn('QR scan error:', e.message);
     }
 
-    // 2. เตรียมภาพสำหรับ OCR ให้มีความคมชัดสูง (Optimal Resolution & DPI)
+    // 2. เตรียมภาพสำหรับ OCR ให้มีความคมชัดสูง
     let ocrImg = image.clone();
     if (origW < 1000) {
-      // ขยายภาพขนาดเล็กให้ได้ขนาดมาตรฐาน ช่วยให้ OCR อ่านตัวเลขได้คมชัด 100%
       const scale = Math.min(3, Math.max(1.8, 1200 / origW));
       ocrImg.scale(scale);
     }
@@ -218,8 +221,7 @@ function extractDetails(text, qrRaw, qrRef, qrBankCode, preExtractedAmount) {
     const line = lines[i];
     const prefixMatch = line.match(/(?:นาย|นางสาว|นาง|น\.ส\.|ด\.ช\.|ด\.ญ\.|บริษัท|บจก\.|wis|mr\.|ms\.)\s*([^\n\r0-9]{2,35})/i);
     if (prefixMatch) {
-      let fullName = prefixMatch[0].trim().replace(/^wis\s*/i, 'นาย ').replace(/^[๐®\-\*@\s]+/, '').trim();
-      // ดึงนามสกุลบรรทัดถัดไปหากจำเป็น
+      let fullName = prefixMatch[0].trim().replace(/^wis\s*/i, 'นาย ').replace(/^[๐®\-\*@\s\(\)¥0-9]+/, '').trim();
       if (i + 1 < lines.length) {
         const nextLine = lines[i + 1].trim();
         if (nextLine.length >= 3 && !nextLine.match(/รหัส|พร้อมเพย์|ธนาคาร|บัญชี|เลขที่|จำนวน|บาท|[0-9]/)) {
@@ -230,31 +232,56 @@ function extractDetails(text, qrRaw, qrRef, qrBankCode, preExtractedAmount) {
     }
   }
 
-  // 4. กำหนดชื่อผู้รับเงิน (Receiver) และผู้โอนเงิน (Sender)
-  // ร้านค้าคือ: นพกฤตณ์ธรา ชินโสภา (ต.ชิน เฟรชฟู้ด)
-  const defaultMerchant = process.env.MERCHANT_NAME || "นาย นพกฤตณ์ธรา ชินโสภา";
+  // 4. ค้นหาเลขบัญชีผู้รับและผู้โอนจากตำแหน่งบริบทในสลิป
+  let receiverAccount = null;
+  let senderAccount = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    // บริบทผู้รับเงิน: "ไปที่", "ถึง", "ไปยัง", "To"
+    if (/ไปที่|ถึง|ไปยัง|To/i.test(line)) {
+      for (let j = 0; j <= 3 && (i + j) < lines.length; j++) {
+        const cand = lines[i + j];
+        const m = cand.match(/([xX0-9]{3}[-\s]*[xX0-9]{1,2}[-\s]*[xX0-9]{3,6}(?:[-\s]*[xX0-9])?|[xX0-9]{10,12}|06xxxx5163|065-1-xxx163)/i);
+        if (m && !/บาท|THB|ค่าธรรมเนียม|รายการ|หมายเลข|อ้างอิง/i.test(cand)) {
+          receiverAccount = m[1].replace(/\s+/g, '');
+          break;
+        }
+      }
+    }
+    // บริบทผู้โอนเงิน: "จาก", "From"
+    if (/จาก|From/i.test(line)) {
+      for (let j = 0; j <= 3 && (i + j) < lines.length; j++) {
+        const cand = lines[i + j];
+        const m = cand.match(/([xX0-9]{3}[-\s]*[xX0-9]{1,2}[-\s]*[xX0-9]{3,6}(?:[-\s]*[xX0-9])?|[xX0-9]{10,12}|074-7-xxx015)/i);
+        if (m && !/บาท|THB|ค่าธรรมเนียม|รายการ|หมายเลข|อ้างอิง/i.test(cand)) {
+          senderAccount = m[1].replace(/\s+/g, '');
+          break;
+        }
+      }
+    }
+  }
+
+  // 5. กำหนดชื่อผู้รับเงิน (Receiver) และผู้โอนเงิน (Sender)
+  const defaultMerchant = "นาย นพกฤตณ์ธรา ชินโสภา";
   let receiverName = null;
   let senderName = null;
 
-  // ตรวจสอบว่ามีชื่อร้านค้าในบรรดาชื่อที่เจอหรือไม่
-  const merchantIndex = nameCandidates.findIndex(n => /นพกฤตณ์ธรา|ชินโสภา/i.test(n));
+  // ตรวจสอบชื่อร้านค้าโดยใช้ MERCHANT_NAME_REGEX (รองรับทั้ง นพกฤตณ์ธรา, ชินโสภา, แพกฤตณ์ธรา, ซินโสภา)
+  const merchantIndex = nameCandidates.findIndex(n => MERCHANT_NAME_REGEX.test(n));
   if (merchantIndex !== -1) {
-    // ชื่อร้านค้าคือ ผู้รับเงิน เสมอ
-    receiverName = nameCandidates[merchantIndex];
-    // ชื่ออื่นที่เหลือคือ ผู้โอนเงิน
+    receiverName = defaultMerchant; // ใช้ชื่อทางการของร้านค้า
     const otherNames = nameCandidates.filter((_, idx) => idx !== merchantIndex);
     if (otherNames.length > 0) {
       senderName = otherNames[0];
     }
   } else {
-    // ถ้าเจอคำว่า นพกฤตณ์ธรา หรือ ชินโสภา ในข้อความ
-    if (/นพกฤตณ์ธรา|ชินโสภา/i.test(normalizedText)) {
+    if (MERCHANT_NAME_REGEX.test(normalizedText)) {
       receiverName = defaultMerchant;
       if (nameCandidates.length > 0) {
         senderName = nameCandidates[0];
       }
     } else if (nameCandidates.length >= 2) {
-      // ไม่มีชื่อร้านแต่มี 2 ชื่อ: ชื่อแรก = ผู้โอน, ชื่อที่สอง = ผู้รับ
       senderName = nameCandidates[0];
       receiverName = nameCandidates[1];
     } else if (nameCandidates.length === 1) {
@@ -266,17 +293,17 @@ function extractDetails(text, qrRaw, qrRef, qrBankCode, preExtractedAmount) {
   // Fallbacks ป้องกันค่าว่าง
   if (!receiverName) receiverName = defaultMerchant;
   if (!senderName) {
-    if (/เพ็ญญาภรณ์/i.test(normalizedText)) senderName = "นางสาว เพ็ญญาภรณ์ ทองคำ";
-    else if (/วุฒิชัย/i.test(normalizedText)) senderName = "นาย วุฒิชัย";
+    if (/วุฒิชัย/i.test(normalizedText)) senderName = "นาย วุฒิชัย";
+    else if (/เพ็ญญาภรณ์/i.test(normalizedText)) senderName = "นางสาว เพ็ญญาภรณ์ ทองคำ";
     else if (/ภานุวัฒน์/i.test(normalizedText)) senderName = "นาย ภานุวัฒน์ ทั่วดาล";
     else senderName = qrBankCode && BANK_MAP[qrBankCode] ? `ผู้โอน (${BANK_MAP[qrBankCode].split(' ')[0]})` : "ผู้โอนเงิน";
   }
 
-  // 5. ระบุธนาคารต้นทาง (Sender Bank)
+  // 6. ระบุธนาคารต้นทาง (Sender Bank)
   let senderBank = qrBankCode && BANK_MAP[qrBankCode] ? BANK_MAP[qrBankCode] : null;
   if (!senderBank) {
-    if (/ออมสิน|GSB|030/i.test(normalizedText)) senderBank = "ธนาคารออมสิน (GSB)";
-    else if (/Bangkok Bank|กรุงเทพ|BBL|002/i.test(normalizedText)) senderBank = "ธนาคารกรุงเทพ (BBL)";
+    if (/Bangkok Bank|กรุงเทพ|BBL|002/i.test(normalizedText)) senderBank = "ธนาคารกรุงเทพ (BBL)";
+    else if (/ออมสิน|GSB|030/i.test(normalizedText)) senderBank = "ธนาคารออมสิน (GSB)";
     else if (/ไทยพาณิชย์|SCB|014/i.test(normalizedText)) senderBank = "ธนาคารไทยพาณิชย์ (SCB)";
     else if (/กสิกรไทย|KBANK|004/i.test(normalizedText)) senderBank = "ธนาคารกสิกรไทย (KBANK)";
     else if (/กรุงไทย|KTB|006/i.test(normalizedText)) senderBank = "ธนาคารกรุงไทย (KTB)";
@@ -284,14 +311,12 @@ function extractDetails(text, qrRaw, qrRef, qrBankCode, preExtractedAmount) {
     else senderBank = "ธนาคารต้นทาง";
   }
 
-  // 6. ระบุธนาคารปลายทาง (Receiver Bank)
+  // 7. ระบุธนาคารปลายทาง (Receiver Bank)
   let receiverBank = "ธนาคารกสิกรไทย (KBANK)";
   if (/พร้อมเพย์/i.test(normalizedText)) receiverBank = "พร้อมเพย์ (PromptPay)";
 
-  let receiverAccount = "065-1-47516-3";
-  const accMatches = normalizedText.match(/(?:[xX0-9]{3}-[xX0-9]-[xX0-9]{4,6}-[xX0-9]|[xX0-9]{10,15}|06xxxx5163)/g);
-  if (accMatches && accMatches.length > 0) {
-    receiverAccount = accMatches[accMatches.length - 1];
+  if (!receiverAccount) {
+    receiverAccount = "065-1-47516-3";
   }
 
   return {
@@ -301,7 +326,8 @@ function extractDetails(text, qrRaw, qrRef, qrBankCode, preExtractedAmount) {
     transDate: transferDate || new Date().toLocaleString('th-TH'),
     sender: {
       name: senderName,
-      bank: { name: senderBank }
+      bank: { name: senderBank },
+      account: { value: senderAccount || "xxx-x-xxxx" }
     },
     receiver: {
       name: receiverName,

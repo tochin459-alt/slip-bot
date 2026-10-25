@@ -39,10 +39,10 @@ tunnelProcess.stderr.on('data', async (data) => {
     console.log(`📍 Webhook Endpoint: ${webhookUrl}`);
     console.log('----------------------------------------------------');
 
-    // หน่วงเวลาเล็กน้อยเพื่อให้ Tunnel พร้อมรับ Request
+    // หน่วงเวลาและลองอัปเดต Webhook ซ้ำจนกว่า LINE จะยอมรับ
     setTimeout(async () => {
-      await updateLineWebhook(webhookUrl);
-    }, 2000);
+      await updateLineWebhookWithRetry(webhookUrl, 5);
+    }, 6000);
   }
 });
 
@@ -50,54 +50,70 @@ tunnelProcess.on('error', (err) => {
   console.error('Tunnel process error:', err);
 });
 
-async function updateLineWebhook(webhookUrl) {
+async function updateLineWebhookWithRetry(webhookUrl, maxRetries = 5) {
   const token = process.env.LINE_CHANNEL_ACCESS_TOKEN;
   if (!token) {
     console.error('❌ ไม่พบ LINE_CHANNEL_ACCESS_TOKEN ใน .env');
     return;
   }
 
-  try {
-    console.log('🔄 กำลังเชื่อมต่อและอัปเดต Webhook ไปยัง LINE Platform...');
-    await axios.put(
-      'https://api.line.me/v2/bot/channel/webhook/endpoint',
-      { endpoint: webhookUrl },
-      {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      console.log(`🔄 กำลังเชื่อมต่อและอัปเดต Webhook ไปยัง LINE (รอบที่ ${attempt}/${maxRetries})...`);
+      await axios.put(
+        'https://api.line.me/v2/bot/channel/webhook/endpoint',
+        { endpoint: webhookUrl },
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
         }
-      }
-    );
-    console.log('✅ ตั้งค่า Webhook บน LINE Platform สำเร็จเรียบร้อย!');
+      );
+      console.log('✅ ตั้งค่า Webhook บน LINE Platform สำเร็จเรียบร้อย!');
 
-    // ทดสอบการเชื่อมต่อ
-    console.log('🔍 กำลังทดสอบส่งสัญญาณ Webhook Test...');
-    const testRes = await axios.post(
-      'https://api.line.me/v2/bot/channel/webhook/test',
-      { endpoint: webhookUrl },
-      {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-          'Content-Type': 'application/json'
+      // ทดสอบการเชื่อมต่อ
+      console.log('🔍 กำลังทดสอบส่งสัญญาณ Webhook Test...');
+      const testRes = await axios.post(
+        'https://api.line.me/v2/bot/channel/webhook/test',
+        { endpoint: webhookUrl },
+        {
+          headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json'
+          }
         }
-      }
-    );
+      );
 
-    if (testRes.data?.success) {
-      console.log('🎉 Webhook Test ผ่านฉลุย 100%! บอทเชื่อมต่อกับ LINE เรียบร้อยแล้ว');
-      console.log('====================================================');
-      console.log('👉 คุณสามารถลองส่งรูปสลิปในห้องแชท LINE ได้ทันทีเลยครับ!');
-      console.log('====================================================\n');
-    } else {
-      console.log('Webhook test response:', testRes.data);
+      if (testRes.data?.success) {
+        console.log('🎉 Webhook Test ผ่านฉลุย 100%! บอทเชื่อมต่อกับ LINE เรียบร้อยแล้ว');
+        console.log('====================================================');
+        console.log('👉 คุณสามารถลองส่งรูปสลิปในห้องแชท LINE ได้ทันทีเลยครับ!');
+        console.log('====================================================\n');
+        return;
+      } else {
+        console.log('Webhook test response:', testRes.data);
+      }
+      return;
+    } catch (err) {
+      console.warn(`รอบที่ ${attempt} ไม่สำเร็จ:`, err.response?.data?.message || err.message);
+      if (attempt < maxRetries) {
+        console.log('รอ 4 วินาทีแล้วลองใหม่...');
+        await new Promise(r => setTimeout(r, 4000));
+      } else {
+        console.error('❌ ไม่สามารถอัปเดต Webhook บน LINE ได้ครบตามจำนวนรอบ');
+      }
     }
-  } catch (err) {
-    console.error('❌ ไม่สามารถอัปเดต Webhook บน LINE ได้:', err.response?.data || err.message);
   }
 }
 
 process.on('SIGINT', () => {
+  serverProcess.kill();
+  tunnelProcess.kill();
+  process.exit();
+});
+
+process.on('SIGTERM', () => {
   serverProcess.kill();
   tunnelProcess.kill();
   process.exit();

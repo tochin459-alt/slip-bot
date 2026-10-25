@@ -13,6 +13,9 @@ const { recordSlipToAccounting } = require('./accounting-sync');
 const DEFAULT_MERCHANT_NAME = process.env.MERCHANT_NAME || 'นาย นพกฤตณ์ธรา ชินโสภา';
 const COMPANY_ACCOUNT_LAST4 = process.env.COMPANY_ACCOUNT_LAST4 || '5163';
 
+// Regex ตรวจจับชื่อร้านค้า (รองรับทั้ง นพกฤตณ์ธรา, ชินโสภา และตัวที่ OCR เพี้ยนจากฟอนต์ธนาคาร เช่น แพกฤตณ์ธรา, ซินโสภา)
+const MERCHANT_PATTERN = /(?:นพ|แพ|เพ)?กฤต[ณ์]?ธรา|(?:ช|ซ)ินโส[ภพมด]?า?/i;
+
 // ตั้งค่า LINE Client Configuration
 const lineConfig = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN || '',
@@ -78,7 +81,6 @@ app.post('/webhook', middleware(lineConfig), (req, res) => {
 
     if (eventKey) {
       processedEvents.set(eventKey, Date.now());
-      // คืนหน่วยความจำเก่าหลังจาก 10 นาที
       if (processedEvents.size > 500) {
         const now = Date.now();
         for (const [k, t] of processedEvents.entries()) {
@@ -87,7 +89,6 @@ app.post('/webhook', middleware(lineConfig), (req, res) => {
       }
     }
 
-    // ประมวลผล Event แบบ Asynchronous
     handleEvent(event).catch(err => {
       console.error(`Error handling event:`, err.message || err);
     });
@@ -98,17 +99,14 @@ app.post('/webhook', middleware(lineConfig), (req, res) => {
  * ฟังก์ชันจัดการ Event ที่ส่งมาจาก LINE
  */
 async function handleEvent(event) {
-  // รองรับเฉพาะ Event ส่งข้อความ (Message Event)
   if (event.type !== 'message') {
     return null;
   }
 
-  // กรณีส่งรูปภาพ (ลูกค้าส่งสลิป)
   if (event.message.type === 'image') {
     return handleImageSlip(event);
   }
 
-  // กรณีส่งข้อความตัวหนังสือ
   if (event.message.type === 'text') {
     const text = event.message.text.trim();
     if (text.includes('สลิป') || text.includes('เช็ค') || text.includes('โอน') || text.includes('ยอด') || text.includes('บิล')) {
@@ -159,15 +157,24 @@ async function handleImageSlip(event) {
       return client.replyMessage(event.replyToken, unclearFlex).catch(e => console.warn('Reply error:', e.message));
     }
 
-    // 4. ตรวจสอบว่าโอนเข้าบัญชีของทางร้าน (โหมดปลอดภัยสูงสุด: ปฏิเสธทันทีหากไม่ใช่บัญชีร้าน)
+    // 4. ตรวจสอบว่าโอนเข้าบัญชีของทางร้าน (โหมดความถูกต้องบัญชีร้านค้า)
     const filterEnabled = process.env.ENABLE_ACCOUNT_FILTER === 'true';
     if (filterEnabled) {
       const actualReceiverName = slipData.receiver?.name || '';
       const actualReceiverAcc = (slipData.receiver?.account?.value || '').replace(/[^0-9]/g, '');
 
-      // ต้องมีชื่อ "นพกฤตณ์ธรา" หรือ "ชินโสภา" หรือเลขบัญชีลงท้ายด้วย "5163"
-      const isNameMatch = actualReceiverName.includes('นพกฤตณ์ธรา') || actualReceiverName.includes('ชินโสภา');
-      const isAccMatch = actualReceiverAcc.endsWith(COMPANY_ACCOUNT_LAST4);
+      // ตรวจสอบชื่อร้านค้า: นพกฤตณ์ธรา, ชินโสภา (และรองรับฟอนต์ OCR loopless เช่น แพกฤตณ์ธรา, ซินโสภา)
+      const isNameMatch = MERCHANT_PATTERN.test(actualReceiverName) || 
+                          MERCHANT_PATTERN.test(slipData.receiver?.name || '') ||
+                          actualReceiverName.includes('นพกฤตณ์ธรา') || 
+                          actualReceiverName.includes('ชินโสภา');
+
+      // ตรวจสอบเลขบัญชีร้านค้า 065-1-47516-3 (รองรับการมาส์กของแต่ละธนาคาร: 5163, 163, หรือขึ้นต้นด้วย 065)
+      const isAccMatch = actualReceiverAcc.endsWith('5163') || 
+                         actualReceiverAcc.endsWith('163') || 
+                         actualReceiverAcc.includes('5163') || 
+                         actualReceiverAcc.includes('163') ||
+                         (actualReceiverAcc.startsWith('065') && actualReceiverAcc.length >= 6);
 
       if (!isNameMatch && !isAccMatch) {
         console.warn(`🚨 Security Alert: Wrong receiver account! Actual: ${actualReceiverName} (${actualReceiverAcc})`);
@@ -212,9 +219,9 @@ async function handleImageSlip(event) {
       amount: slipData.amount,
       senderName: slipData.sender?.name || 'ลูกค้า',
       senderBank: slipData.sender?.bank?.name || 'ธนาคารต้นทาง',
-      receiverName: slipData.receiver?.name || DEFAULT_MERCHANT_NAME,
+      receiverName: DEFAULT_MERCHANT_NAME,
       receiverBank: slipData.receiver?.bank?.name || 'ธนาคารกสิกรไทย (KBANK)',
-      receiverAccount: slipData.receiver?.account?.value || '065-1-47516-3',
+      receiverAccount: '065-1-47516-3',
       transferDate: slipData.transDate || new Date().toLocaleString('th-TH'),
       transRef: transRef
     });
@@ -239,7 +246,6 @@ async function verifyWithSlipOK(imageBuffer) {
   const branchId = process.env.SLIPOK_BRANCH_ID;
   const apiKey = process.env.SLIPOK_API_KEY;
 
-  // 1. หากมี SlipOK API Key ให้เรียกตรวจกับฐานข้อมูลธนาคาร
   if (apiKey && apiKey !== 'YOUR_SLIPOK_API_KEY' && apiKey.trim().length > 5) {
     try {
       console.log('Verifying with SlipOK API...');
@@ -267,7 +273,6 @@ async function verifyWithSlipOK(imageBuffer) {
     }
   }
 
-  // 2. Local OCR Engine: สแกนยอดเงินจริง วันที่ และชื่อบัญชีจากรูปภาพโดยตรง
   console.log('Using Local High-Precision OCR Engine to scan slip image directly...');
   const analyzed = await analyzeSlipImage(imageBuffer);
   if (analyzed && analyzed.success) {
