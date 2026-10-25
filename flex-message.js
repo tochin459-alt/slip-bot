@@ -3,7 +3,12 @@
  */
 
 function createSuccessFlex(data) {
-  const formattedAmount = Number(data.amount || 0).toLocaleString('th-TH', {
+  const amount = Number(data.amount || 0);
+  if (amount <= 0) {
+    return createUnclearSlipFlex(data);
+  }
+
+  const formattedAmount = amount.toLocaleString('th-TH', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
@@ -43,7 +48,7 @@ function createSuccessFlex(data) {
           },
           {
             type: "text",
-            text: "ตรวจสอบและบันทึกยอดเงินเรียบร้อย",
+            text: "ตรวจสอบและบันทึกยอดเงินเข้าระบบเรียบร้อย",
             color: "#d1fae5",
             size: "xs",
             margin: "xs"
@@ -56,81 +61,30 @@ function createSuccessFlex(data) {
         spacing: "md",
         paddingAll: "20px",
         contents: [
-          // ผู้รับเงิน
+          // 1. ผู้โอนเงิน (จาก:)
           {
             type: "box",
             layout: "horizontal",
             contents: [
               {
                 type: "text",
-                text: "ผู้รับเงิน",
+                text: "ผู้โอนเงิน (จาก)",
                 size: "xs",
                 color: "#94a3b8",
-                flex: 3
+                flex: 4
               },
               {
                 type: "text",
-                text: data.receiverName || "บัญชีร้านค้า",
+                text: data.senderName || "ลูกค้า",
                 size: "xs",
                 weight: "bold",
                 color: "#1e293b",
                 align: "end",
-                flex: 7,
+                flex: 6,
                 wrap: true
               }
             ]
           },
-          // ธนาคารผู้รับ
-          {
-            type: "box",
-            layout: "horizontal",
-            contents: [
-              {
-                type: "text",
-                text: "เข้าบัญชี",
-                size: "xs",
-                color: "#94a3b8",
-                flex: 3
-              },
-              {
-                type: "text",
-                text: `${data.receiverBank || 'ธนาคาร'} (${data.receiverAccount || 'xxx-x-xxxxx'})`,
-                size: "xs",
-                color: "#475569",
-                align: "end",
-                flex: 7
-              }
-            ]
-          },
-          {
-            type: "separator",
-            margin: "md"
-          },
-          // ผู้โอนเงิน
-          {
-            type: "box",
-            layout: "horizontal",
-            contents: [
-              {
-                type: "text",
-                text: "ผู้โอนเงิน",
-                size: "xs",
-                color: "#94a3b8",
-                flex: 3
-              },
-              {
-                type: "text",
-                text: data.senderName || "ผู้โอน",
-                size: "xs",
-                weight: "bold",
-                color: "#1e293b",
-                align: "end",
-                flex: 7,
-                wrap: true
-              }
-            ]
-          },
-          // ธนาคารต้นทาง
           {
             type: "box",
             layout: "horizontal",
@@ -140,7 +94,7 @@ function createSuccessFlex(data) {
                 text: "จากธนาคาร",
                 size: "xs",
                 color: "#94a3b8",
-                flex: 3
+                flex: 4
               },
               {
                 type: "text",
@@ -148,11 +102,64 @@ function createSuccessFlex(data) {
                 size: "xs",
                 color: "#475569",
                 align: "end",
-                flex: 7
+                flex: 6
               }
             ]
           },
-          // วัน-เวลา
+          {
+            type: "separator",
+            margin: "md"
+          },
+          // 2. ผู้รับเงิน (ไปยัง:)
+          {
+            type: "box",
+            layout: "horizontal",
+            contents: [
+              {
+                type: "text",
+                text: "ผู้รับเงิน (ไปยัง)",
+                size: "xs",
+                color: "#94a3b8",
+                flex: 4
+              },
+              {
+                type: "text",
+                text: data.receiverName || "นาย นพกฤตณ์ธรา ชินโสภา",
+                size: "xs",
+                weight: "bold",
+                color: "#059669",
+                align: "end",
+                flex: 6,
+                wrap: true
+              }
+            ]
+          },
+          {
+            type: "box",
+            layout: "horizontal",
+            contents: [
+              {
+                type: "text",
+                text: "เข้าบัญชี",
+                size: "xs",
+                color: "#94a3b8",
+                flex: 4
+              },
+              {
+                type: "text",
+                text: `${data.receiverBank || 'ธ.กสิกรไทย'} (${data.receiverAccount || '065-1-47516-3'})`,
+                size: "xs",
+                color: "#475569",
+                align: "end",
+                flex: 6
+              }
+            ]
+          },
+          {
+            type: "separator",
+            margin: "md"
+          },
+          // 3. วัน-เวลาทำรายการ
           {
             type: "box",
             layout: "horizontal",
@@ -162,7 +169,7 @@ function createSuccessFlex(data) {
                 text: "เวลาทำรายการ",
                 size: "xs",
                 color: "#94a3b8",
-                flex: 3
+                flex: 4
               },
               {
                 type: "text",
@@ -170,11 +177,11 @@ function createSuccessFlex(data) {
                 size: "xs",
                 color: "#475569",
                 align: "end",
-                flex: 7
+                flex: 6
               }
             ]
           },
-          // รหัสอ้างอิง
+          // 4. รหัสอ้างอิง
           {
             type: "box",
             layout: "horizontal",
@@ -184,7 +191,7 @@ function createSuccessFlex(data) {
                 text: "รหัสอ้างอิง",
                 size: "xs",
                 color: "#94a3b8",
-                flex: 3
+                flex: 4
               },
               {
                 type: "text",
@@ -192,7 +199,7 @@ function createSuccessFlex(data) {
                 size: "xxs",
                 color: "#64748b",
                 align: "end",
-                flex: 7,
+                flex: 6,
                 wrap: true
               }
             ]
@@ -205,13 +212,68 @@ function createSuccessFlex(data) {
         contents: [
           {
             type: "text",
-            text: "ขอบคุณที่ใช้บริการครับ 🙏",
+            text: "ขอบคุณที่ใช้บริการ ต.ชิน เฟรชฟู้ด ครับ 🙏",
             align: "center",
             size: "xs",
             color: "#94a3b8"
           }
         ],
         paddingAll: "15px"
+      }
+    }
+  };
+}
+
+function createUnclearSlipFlex(data) {
+  return {
+    type: "flex",
+    altText: "⚠️ ไม่พบยอดเงินในสลิป กรุณาลองใหม่อีกครั้ง",
+    contents: {
+      type: "bubble",
+      size: "mega",
+      header: {
+        type: "box",
+        layout: "vertical",
+        backgroundColor: "#f59e0b",
+        paddingAll: "20px",
+        contents: [
+          {
+            type: "text",
+            text: "⚠️ ภาพสลิปไม่ชัดเจน",
+            color: "#ffffff",
+            weight: "bold",
+            size: "lg"
+          },
+          {
+            type: "text",
+            text: "ระบบไม่สามารถระบุยอดเงินที่แน่นอนได้",
+            color: "#fef3c7",
+            size: "xs",
+            margin: "xs"
+          }
+        ]
+      },
+      body: {
+        type: "box",
+        layout: "vertical",
+        spacing: "md",
+        paddingAll: "20px",
+        contents: [
+          {
+            type: "text",
+            text: "คำแนะนำ:",
+            size: "sm",
+            weight: "bold",
+            color: "#1e293b"
+          },
+          {
+            type: "text",
+            text: "1. กรุณาส่งภาพสลิปต้นฉบับจากแอปธนาคาร\n2. หลีกเลี่ยงภาพแคปหน้าจอที่มีแถบเครื่องมือบังยอดเงิน\n3. ให้เห็นตัวเลขจำนวนเงินและ QR Code ครบถ้วน",
+            size: "xs",
+            color: "#475569",
+            wrap: true
+          }
+        ]
       }
     }
   };
@@ -239,7 +301,7 @@ function createDuplicateFlex(data) {
           },
           {
             type: "text",
-            text: "สลิปนี้ถูกนำมาใช้ซ้ำแล้ว",
+            text: "สลิปนี้เคยได้รับการยืนยันและบันทึกแล้ว",
             color: "#ffe4e6",
             size: "xs",
             margin: "xs"
@@ -261,7 +323,7 @@ function createDuplicateFlex(data) {
           },
           {
             type: "text",
-            text: "หากคิดว่าเป็นข้อผิดพลาด กรุณาติดต่อแอดมินเพื่อตรวจสอบโดยตรงครับ",
+            text: "ยอดเงินของรายการนี้ถูกบันทึกเข้าระบบบัญชีเรียบร้อยแล้วครับ หากต้องการตรวจสอบเพิ่มเติมกรุณาติดต่อเจ้าหน้าที่ครับ",
             size: "xs",
             color: "#334155",
             wrap: true
@@ -362,6 +424,7 @@ function createWrongAccountFlex(data) {
 
 module.exports = {
   createSuccessFlex,
+  createUnclearSlipFlex,
   createDuplicateFlex,
   createWrongAccountFlex
 };
